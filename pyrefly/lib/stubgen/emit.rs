@@ -95,8 +95,17 @@ fn emit_function(func: &StubFunction, out: &mut String, indent: &str) {
     if let Some(tp) = &func.type_params {
         out.push_str(tp);
     }
+    let multiline_init = func.name == "__init__" && func.params.len() >= 5;
     out.push('(');
-    emit_params(&func.params, out);
+    if multiline_init {
+        let param_indent = format!("{}    ", indent);
+        out.push('\n');
+        emit_params_multiline(&func.params, out, &param_indent);
+        out.push('\n');
+        out.push_str(indent);
+    } else {
+        emit_params(&func.params, out);
+    }
     out.push(')');
 
     if let Some(ret) = &func.return_type {
@@ -124,26 +133,42 @@ fn emit_params(params: &[StubParam], out: &mut String) {
             out.push_str(", ");
         }
         first = false;
+        emit_one_param(param, out);
+    }
+}
 
-        if param.name == "*" || param.name == "/" {
-            out.push_str(&param.name);
-            continue;
+fn emit_params_multiline(params: &[StubParam], out: &mut String, line_indent: &str) {
+    for (i, param) in params.iter().enumerate() {
+        if i > 0 {
+            out.push_str(",\n");
         }
+        out.push_str(line_indent);
+        emit_one_param(param, out);
+    }
+    if !params.is_empty() {
+        out.push(',');
+    }
+}
 
-        out.push_str(param.prefix);
+fn emit_one_param(param: &StubParam, out: &mut String) {
+    if param.name == "*" || param.name == "/" {
         out.push_str(&param.name);
-        if let Some(ann) = &param.annotation {
-            out.push_str(": ");
-            out.push_str(ann);
+        return;
+    }
+
+    out.push_str(param.prefix);
+    out.push_str(&param.name);
+    if let Some(ann) = &param.annotation {
+        out.push_str(": ");
+        out.push_str(ann);
+    }
+    if let Some(default) = &param.default {
+        if param.annotation.is_some() {
+            out.push_str(" = ");
+        } else {
+            out.push('=');
         }
-        if let Some(default) = &param.default {
-            if param.annotation.is_some() {
-                out.push_str(" = ");
-            } else {
-                out.push('=');
-            }
-            out.push_str(default);
-        }
+        out.push_str(default);
     }
 }
 
