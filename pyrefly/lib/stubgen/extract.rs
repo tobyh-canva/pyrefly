@@ -59,6 +59,9 @@ pub struct ModuleStub {
     /// emit `from _typeshed import Incomplete`).
     pub uses_incomplete: bool,
     pub uses_self: bool,
+    /// Whether any class-body assignment stub uses `ClassVar[...]` (so we know
+    /// whether to emit `from typing import ClassVar`).
+    pub uses_classvar: bool,
 }
 
 pub enum StubItem {
@@ -144,6 +147,7 @@ pub fn extract_module_stub(
         config,
         uses_incomplete: false,
         uses_self: false,
+        uses_classvar: false,
         function_map: &function_map,
         dunder_all: &dunder_all,
         current_class: None,
@@ -156,6 +160,7 @@ pub fn extract_module_stub(
         items,
         uses_incomplete: ctx.uses_incomplete,
         uses_self: ctx.uses_self,
+        uses_classvar: ctx.uses_classvar,
     })
 }
 
@@ -166,6 +171,7 @@ struct ExtractionContext<'a> {
     config: &'a ExtractConfig,
     uses_incomplete: bool,
     uses_self: bool,
+    uses_classvar: bool,
     function_map: &'a HashMap<TextRange, DecoratedFunction>,
     /// When `__all__` is explicitly defined, only these names are exported
     /// at module level. `None` means no explicit `__all__` — use convention.
@@ -627,6 +633,19 @@ fn extract_assign(
                 .key_to_idx_hashed_opt(starlark_map::Hashed::new(&def_key))
                 .and_then(|idx| ctx.answers.get_type_at(idx))
                 .and_then(|ty| format_type(&ty, ctx));
+
+            let annotation = if in_class {
+                annotation.map(|ann| {
+                    ctx.uses_classvar = true;
+                    if ann.starts_with("ClassVar[") {
+                        ann
+                    } else {
+                        format!("ClassVar[{ann}]")
+                    }
+                })
+            } else {
+                annotation
+            };
 
             let value = simple_value_text(&assign.value, ctx.module_info);
 

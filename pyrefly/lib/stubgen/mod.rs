@@ -834,4 +834,34 @@ class CustomInit(BaseModel):
 "#;
         pretty_assertions::assert_str_eq!(expected, &actual);
     }
+
+    #[test]
+    fn test_stubgen_dataclass_repr_false_repr_rebind_uses_classvar() {
+        let actual = run_stubgen(
+            r#"
+from dataclasses import dataclass
+
+def _repr_fn(self: object) -> str:
+    return "x"
+
+@dataclass(repr=False)
+class C:
+    __repr__ = _repr_fn
+"#,
+        );
+        pretty_assertions::assert_str_eq!(
+            r#"
+from typing import Callable, ClassVar
+
+from dataclasses import dataclass
+
+
+@dataclass(repr=False)
+class C:
+    __repr__: ClassVar[Callable[[object], str]]
+"#
+            .trim(),
+            actual.trim(),
+        );
+    }
 }
