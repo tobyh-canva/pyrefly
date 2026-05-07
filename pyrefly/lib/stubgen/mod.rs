@@ -864,4 +864,48 @@ class C:
             actual.trim(),
         );
     }
+
+    /// Class-body assignment to an `@overload` group must print as `Overload[Callable[...], ...]`
+    /// (annotation-safe) and pull `Overload` into the stub typing import.
+    #[test]
+    fn test_stubgen_class_body_overloaded_assign_uses_overload_callable() {
+        let actual = run_stubgen(
+            r#"
+from typing import overload
+
+@overload
+def process(x: int) -> int: ...
+
+@overload
+def process(x: str) -> str: ...
+
+def process(x):
+    return x
+
+class C:
+    alias = process
+"#,
+        );
+        pretty_assertions::assert_str_eq!(
+            r#"
+from typing import Callable, ClassVar, Overload
+
+from typing import overload
+
+
+@overload
+def process(x: int) -> int: ...
+
+
+@overload
+def process(x: str) -> str: ...
+
+
+class C:
+    alias: ClassVar[Overload[Callable[[int], int], Callable[[str], str]]] = ...
+"#
+            .trim(),
+            actual.trim(),
+        );
+    }
 }
