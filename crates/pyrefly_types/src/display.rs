@@ -25,6 +25,8 @@ use starlark_map::small_set::SmallSet;
 use starlark_map::smallmap;
 
 use crate::callable::Function;
+use crate::callable::Param;
+use crate::callable::Params;
 use crate::class::Class;
 use crate::heap::TypeHeap;
 use crate::literal::Lit;
@@ -48,6 +50,8 @@ use crate::types::CallableResidualKind;
 use crate::types::Forall;
 use crate::types::Forallable;
 use crate::types::NeverStyle;
+use crate::types::Overload;
+use crate::types::OverloadType;
 use crate::types::SuperObj;
 use crate::types::TArgs;
 use crate::types::Type;
@@ -139,6 +143,9 @@ pub struct TypeDisplayContext<'a> {
     always_display_module_name: bool,
     always_display_expanded_unions: bool,
     render_self_type_as_self: bool,
+    /// When set, format function and callable types as `typing.Callable[[...], ...]` /
+    /// `typing.Overload[...]` so output is valid in `.py` / `.pyi` annotations.
+    stub_source_compat: bool,
     /// Optional stdlib reference for resolving builtin type locations
     stdlib: Option<&'a Stdlib>,
     /// Stack of identities of type variables currently bound by enclosing Foralls.
@@ -197,6 +204,12 @@ impl<'a> TypeDisplayContext<'a> {
 
     pub fn render_self_type_as_self(&mut self) {
         self.render_self_type_as_self = true;
+    }
+
+    /// Prefer `Callable` / `Overload` spellings that parse as real type annotations
+    /// (stub files, generated source).
+    pub fn render_stub_source_compat(&mut self) {
+        self.stub_source_compat = true;
     }
 
     /// Always display the module name, except for builtins.
@@ -438,6 +451,86 @@ impl<'a> TypeDisplayContext<'a> {
         self.fmt_helper_generic(&value_type, false, output)
     }
 
+    /// `Callable[[A, B], R]` cannot encode *args, **kwargs, keyword-only parameters, or
+    /// ParamSpec materializations; use `Callable[..., R]` in those cases.
+    fn callable_params_need_ellipsis(params: &Params) -> bool {
+        match params {
+            Params::Ellipsis | Params::Materialization | Params::ParamSpec(..) => true,
+            Params::List(pl) => pl.items().iter().any(|p| {
+                matches!(
+                    p,
+                    Param::Varargs(..) | Param::Kwargs(..) | Param::KwOnly(..)
+                )
+            }),
+        }
+    }
+
+    /// Emit `typing.Callable[..., R]` or `typing.Callable[[t1, ...], R]` using only parameter
+    /// types (no `self: ...` names), which is valid annotation syntax.
+    fn fmt_callable_stub_shape(
+        &self,
+        params: &Params,
+        ret: &Type,
+        output: &mut impl TypeOutput,
+    ) -> fmt::Result {
+        let callable_qname = self.get_special_form_qname("Callable");
+        output.write_builtin("Callable", callable_qname)?;
+        output.write_str("[")?;
+        if Self::callable_params_need_ellipsis(params) {
+            output.write_str("...")?;
+        } else if let Params::List(pl) = params {
+            output.write_str("[")?;
+            for (i, p) in pl.items().iter().enumerate() {
+                if i > 0 {
+                    output.write_str(", ")?;
+                }
+                self.fmt_helper_generic(p.as_type(), false, output)?;
+            }
+            output.write_str("]")?;
+        } else {
+            output.write_str("...")?;
+        }
+        output.write_str(", ")?;
+        self.fmt_helper_generic(ret, false, output)?;
+        output.write_str("]")
+    }
+
+    fn fmt_overload_stub_shape(
+        &self,
+        overload: &Overload,
+        output: &mut impl TypeOutput,
+        strip_self: bool,
+    ) -> fmt::Result {
+        let qname = self.get_special_form_qname("Overload");
+        output.write_builtin("Overload", qname)?;
+        output.write_str("[")?;
+        for (i, sig) in overload.signatures.iter().enumerate() {
+            if i > 0 {
+                output.write_str(", ")?;
+            }
+            match sig {
+                OverloadType::Function(f) => {
+                    let c = if strip_self {
+                        f.signature.strip_self_param()
+                    } else {
+                        f.signature.clone()
+                    };
+                    self.fmt_callable_stub_shape(&c.params, &c.ret, output)?;
+                }
+                OverloadType::Forall(forall) => {
+                    let _scope = self.push_forall_scope(forall.tparams.iter());
+                    let c = if strip_self {
+                        forall.body.signature.strip_self_param()
+                    } else {
+                        forall.body.signature.clone()
+                    };
+                    self.fmt_callable_stub_shape(&c.params, &c.ret, output)?;
+                }
+            }
+        }
+        output.write_str("]")
+    }
+
     /// Core formatting logic for types that works with any `TypeOutput` implementation.
     ///
     /// The method uses the `TypeOutput` trait abstraction to write output in various ways.
@@ -610,6 +703,9 @@ impl<'a> TypeDisplayContext<'a> {
                 let qname = self.get_special_form_qname("LiteralString");
                 output.write_builtin("LiteralString", qname)
             }
+            Type::Callable(box c) if self.stub_source_compat => {
+                self.fmt_callable_stub_shape(&c.params, &c.ret, output)
+            }
             Type::Callable(box c) => {
                 if self.lsp_display_mode == LspDisplayMode::Hover && is_toplevel {
                     c.fmt_with_type_with_newlines(output, &|t, o| {
@@ -635,6 +731,9 @@ impl<'a> TypeDisplayContext<'a> {
                     output.write_str("]")
                 }
             },
+            Type::Function(box Function { signature, .. }) if self.stub_source_compat => {
+                self.fmt_callable_stub_shape(&signature.params, &signature.ret, output)
+            }
             Type::Function(box Function {
                 signature,
                 metadata,
@@ -667,6 +766,9 @@ impl<'a> TypeDisplayContext<'a> {
                 }
                 _ => signature.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o)),
             },
+            Type::Overload(overload) if self.stub_source_compat => {
+                self.fmt_overload_stub_shape(overload, output, false)
+            }
             Type::Overload(overload) => {
                 if self.lsp_display_mode == LspDisplayMode::Hover && is_toplevel {
                     output.write_str("\n@overload\n")?;
@@ -708,6 +810,20 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_str("[")?;
                 x.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o))?;
                 output.write_str("]")
+            }
+            Type::BoundMethod(box BoundMethod { func, .. }) if self.stub_source_compat => {
+                match &func {
+                    BoundMethodType::Function(f) => {
+                        let c = f.signature.strip_self_param();
+                        self.fmt_callable_stub_shape(&c.params, &c.ret, output)
+                    }
+                    BoundMethodType::Forall(forall) => {
+                        let _scope = self.push_forall_scope(forall.tparams.iter());
+                        let c = forall.body.signature.strip_self_param();
+                        self.fmt_callable_stub_shape(&c.params, &c.ret, output)
+                    }
+                    BoundMethodType::Overload(ov) => self.fmt_overload_stub_shape(ov, output, true),
+                }
             }
             Type::BoundMethod(box BoundMethod { obj, func }) => {
                 match self.lsp_display_mode {
@@ -962,6 +1078,13 @@ impl<'a> TypeDisplayContext<'a> {
                 t.fmt_with_type(output, tuple_qname, &|ty, o| {
                     self.fmt_helper_generic(ty, false, o)
                 })
+            }
+            Type::Forall(box Forall { tparams, body })
+                if self.stub_source_compat
+                    && matches!(body, Forallable::Function(_) | Forallable::Callable(_)) =>
+            {
+                let _scope = self.push_forall_scope(tparams.iter());
+                self.fmt_helper_generic(&body.clone().as_type(), false, output)
             }
             Type::Forall(box Forall {
                 tparams,

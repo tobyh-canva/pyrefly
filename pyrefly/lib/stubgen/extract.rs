@@ -62,6 +62,10 @@ pub struct ModuleStub {
     /// Whether any class-body assignment stub uses `ClassVar[...]` (so we know
     /// whether to emit `from typing import ClassVar`).
     pub uses_classvar: bool,
+    /// Whether inferred types use `Callable[...]` (typing import).
+    pub uses_callable: bool,
+    /// Whether inferred types use `Overload[...]` (typing import).
+    pub uses_overload: bool,
 }
 
 pub enum StubItem {
@@ -148,6 +152,8 @@ pub fn extract_module_stub(
         uses_incomplete: false,
         uses_self: false,
         uses_classvar: false,
+        uses_callable: false,
+        uses_overload: false,
         function_map: &function_map,
         dunder_all: &dunder_all,
         current_class: None,
@@ -161,6 +167,8 @@ pub fn extract_module_stub(
         uses_incomplete: ctx.uses_incomplete,
         uses_self: ctx.uses_self,
         uses_classvar: ctx.uses_classvar,
+        uses_callable: ctx.uses_callable,
+        uses_overload: ctx.uses_overload,
     })
 }
 
@@ -172,6 +180,8 @@ struct ExtractionContext<'a> {
     uses_incomplete: bool,
     uses_self: bool,
     uses_classvar: bool,
+    uses_callable: bool,
+    uses_overload: bool,
     function_map: &'a HashMap<TextRange, DecoratedFunction>,
     /// When `__all__` is explicitly defined, only these names are exported
     /// at module level. `None` means no explicit `__all__` — use convention.
@@ -443,10 +453,17 @@ fn format_type(ty: &Type, ctx: &mut ExtractionContext) -> Option<String> {
     }
     let mut display = TypeDisplayContext::new(&[ty]);
     display.render_self_type_as_self();
+    display.render_stub_source_compat();
     let s = display.display(ty).to_string();
     if s.contains("@") || s.contains("Unknown") {
         ctx.uses_incomplete = true;
         return Some("Incomplete".to_owned());
+    }
+    if s.contains("Callable[") {
+        ctx.uses_callable = true;
+    }
+    if s.contains("Overload[") {
+        ctx.uses_overload = true;
     }
     Some(s)
 }

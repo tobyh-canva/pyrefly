@@ -19,11 +19,17 @@ pub fn emit_stub(stub: &ModuleStub) -> String {
     let mut out = String::new();
 
     let mut typing_imports: Vec<&str> = Vec::new();
-    if stub.uses_self {
-        typing_imports.push("Self");
+    if stub.uses_callable {
+        typing_imports.push("Callable");
     }
     if stub.uses_classvar {
         typing_imports.push("ClassVar");
+    }
+    if stub.uses_overload {
+        typing_imports.push("Overload");
+    }
+    if stub.uses_self {
+        typing_imports.push("Self");
     }
     if !typing_imports.is_empty() {
         out.push_str("from typing import ");
