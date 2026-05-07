@@ -858,7 +858,7 @@ from dataclasses import dataclass
 
 @dataclass(repr=False)
 class C:
-    __repr__: ClassVar[Callable[[object], str]]
+    __repr__: ClassVar[Callable[[object], str]] = ...
 "#
             .trim(),
             actual.trim(),

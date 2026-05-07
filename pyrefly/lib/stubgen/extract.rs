@@ -664,7 +664,12 @@ fn extract_assign(
                 annotation
             };
 
-            let value = simple_value_text(&assign.value, ctx.module_info);
+            let mut value = simple_value_text(&assign.value, ctx.module_info);
+            // Match stub conventions (and `extract_ann_assign`'s class-body elision): if there is a
+            // runtime assignment but we cannot preserve the RHS literally, still emit `= ...`.
+            if in_class && annotation.is_some() && value.is_none() {
+                value = Some("...".to_owned());
+            }
 
             if annotation.is_some() || value.is_some() {
                 result.push(StubVariable {
