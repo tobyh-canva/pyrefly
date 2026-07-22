@@ -1326,7 +1326,7 @@ impl CheckArgs {
             suppress::remove_unused_ignores(
                 unused_errors,
                 self.behavior.remove_unused_type_ignores,
-            );
+            )?;
         }
 
         // We update the baseline file if requested, after reporting any new

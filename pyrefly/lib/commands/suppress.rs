@@ -32,6 +32,7 @@ pub struct SuppressArgs {
 
     /// Path to a JSON file containing errors to suppress.
     /// The JSON should be an array of objects with "path", "line", "name", and "message" fields.
+    /// Unused suppression diagnostics must also include a structured "suppression_edit".
     #[arg(long)]
     json: Option<PathBuf>,
 
@@ -97,7 +98,7 @@ impl SuppressArgs {
             suppress::remove_unused_ignores_from_serialized(
                 unused_errors,
                 self.remove_unused_type_ignores,
-            );
+            )?;
         } else {
             // Add suppressions mode (existing behavior)
             let serialized_errors: Vec<SerializedError> = if let Some(json_path) = &self.json {
