@@ -501,7 +501,29 @@ more details on how baseline files work.
     - `baseline` is a **project-level setting** and cannot be overridden in
       [`sub-config`](#sub-configs) sections.
     - Errors suppressed by the baseline file are still shown in the IDE.
-    - Errors are matched with the baseline by file, error code, and column number.
+    - By default, baseline entries contain only the file, error code, and column
+      number, and these fields are used for matching.
+
+### `baseline-fields`
+
+The fields written to baseline entries and used to match diagnostics. Supported fields
+are `line`, `column`, `path`, `name`, `concise_description`, `severity`, and `cell`.
+
+```toml
+baseline = "baseline.json"
+baseline-fields = ["path", "name", "concise_description"]
+```
+
+Regenerate the baseline after changing this setting so every entry contains the selected
+fields.
+
+- Type: list of baseline field names
+- Default: `path`, `name`, and `column`
+- Flag equivalent: none
+- Notes:
+    - `baseline-fields` is a **project-level setting** and cannot be overridden
+      in [`sub-config`](#sub-configs) sections.
+    - It's strongly encouraged to always include `path` and `name`.
 
 ### `baseline-error-level`
 

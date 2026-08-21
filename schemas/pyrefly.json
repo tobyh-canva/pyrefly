@@ -215,6 +215,16 @@
           "enum": ["ignore", "info", "warn", "error"],
           "default": "ignore"
         },
+        "baseline-fields": {
+          "description": "Fields to store in the baseline and use when matching errors.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["line", "column", "path", "name", "concise_description", "severity", "cell"]
+          },
+          "uniqueItems": true,
+          "default": ["path", "name", "column"]
+        },
         "build-system": {
           "description": "Pyrefly supports integrating into build systems to discover targets to type check and their dependencies. Currently supports Buck2 and custom queries.",
           "type": "object",

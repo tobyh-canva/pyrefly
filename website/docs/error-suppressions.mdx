@@ -131,7 +131,18 @@ When the baseline is specified in the configuration file, you don't need to pass
 
 Note that `baseline` is a **project-level setting** and cannot be overridden in [`sub-config`](./configuration.mdx#sub-configs) sections. If you need different baseline files for different parts of your codebase, consider using separate Pyrefly configuration files.
 
-Errors are matched with the baseline by looking at file, error code, and column number.
+By default, baseline entries contain only the path, error code, and column number, and
+these fields are used for matching. The project-level `baseline-fields` setting selects
+the fields written to the baseline and used for matching:
+
+```toml
+baseline = "baseline.json"
+baseline-fields = ["path", "name", "concise_description"]
+```
+
+Supported fields are `line`, `column`, `path`, `name`, `concise_description`,
+`severity`, and `cell`. Regenerate the baseline after changing `baseline-fields`. It's
+strongly encouraged to always include `path` and `name`.
 Note that errors suppressed by the baseline file are still shown in the IDE.
 
 `--baseline-error-level=<ignore|info|warn|error>` and the project-level

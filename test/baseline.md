@@ -62,18 +62,35 @@ ERROR *bad.py* ?bad-assignment? (glob)
 [1]
 ```
 
+By default, only the fields used for matching are written to the baseline.
+
 ```scrut {output_stream: stdout}
-$ grep '"name": "bad-assignment"' $TMPDIR/baseline_update_from_pyproject/baseline.json
-      "name": "bad-assignment",
+$ $JQ -c '.errors[0] | keys' $TMPDIR/baseline_update_from_pyproject/baseline.json
+["column","name","path"]
 [0]
 ```
 
-The written baseline omits fields that are not used for matching.
+## Configured baseline fields control storage and matching
 
 ```scrut {output_stream: stdout}
-$ grep -cE '"(line|stop_line|stop_column|code|description)"' $TMPDIR/baseline_update_from_pyproject/baseline.json
-0
-[1]
+$ mkdir -p $TMPDIR/baseline_fields && \
+> echo "x: str = 1" > $TMPDIR/baseline_fields/bad.py && \
+> printf 'baseline = "baseline.json"\nbaseline-fields = ["path", "name", "concise_description"]\n' > $TMPDIR/baseline_fields/pyrefly.toml && \
+> cd $TMPDIR/baseline_fields && \
+> $PYREFLY check --update-baseline --summary=none --output-format=omit-errors >/dev/null 2>/dev/null; \
+> $JQ -c '.errors[0] | keys' baseline.json
+["concise_description","name","path"]
+[0]
+```
+
+The selected fields do not depend on the diagnostic's location, so moving the error does
+not invalidate the baseline entry.
+
+```scrut {output_stream: stdout}
+$ cd $TMPDIR/baseline_fields && \
+> printf '\nx: str = 1\n' > bad.py && \
+> $PYREFLY check --summary=none --output-format=min-text
+[0]
 ```
 
 ## Updating a baseline requires a path from the CLI or configuration
@@ -200,7 +217,7 @@ $ $JQ '.errors | length' $TMPDIR/baseline_narrowed/baseline.json
 $ mkdir -p $TMPDIR/baseline_prune && \
 > printf 'x: str = 1\nyyyy: int = ""\n' > $TMPDIR/baseline_prune/bad.py && \
 > echo '{"errors": [{"line": 1, "column": 10, "stop_line": 1, "stop_column": 11, "path": "bad.py", "code": -2, "name": "bad-assignment", "description": "test", "concise_description": "test"}, {"line": 1, "column": 1, "stop_line": 1, "stop_column": 2, "path": "gone.py", "code": -2, "name": "bad-return", "description": "test", "concise_description": "test"}]}' > $TMPDIR/baseline_prune/baseline.json && \
-> touch $TMPDIR/baseline_prune/pyrefly.toml && \
+> echo 'baseline-fields = ["path", "name", "column", "concise_description"]' > $TMPDIR/baseline_prune/pyrefly.toml && \
 > cd $TMPDIR/baseline_prune && \
 > $PYREFLY check bad.py --baseline=baseline.json --prune-baseline --summary=none --output-format=omit-errors
  INFO Removed 1 unused suppression from the baseline file
@@ -462,7 +479,7 @@ $ cd $TMPDIR/baseline_levels && \
 $ mkdir -p $TMPDIR/baseline_prune_provenance && \
 > printf 'x: str = 1\n' > $TMPDIR/baseline_prune_provenance/matched.py && \
 > echo '{"errors":[{"column":10,"path":"matched.py","name":"bad-assignment","concise_description":"test","severity":"info"},{"column":1,"path":"gone.py","name":"bad-return","concise_description":"stale","severity":"error"}]}' > $TMPDIR/baseline_prune_provenance/baseline.json && \
-> touch $TMPDIR/baseline_prune_provenance/pyrefly.toml && \
+> echo 'baseline-fields = ["path", "name", "column", "severity"]' > $TMPDIR/baseline_prune_provenance/pyrefly.toml && \
 > cd $TMPDIR/baseline_prune_provenance && \
 > $PYREFLY check matched.py --baseline=baseline.json --baseline-error-level=warn --prune-baseline --summary=none --output-format=omit-errors >/dev/null 2>/dev/null; \
 > $JQ -c '[.errors[] | {severity, baselined: has("baselined")}]' baseline.json

@@ -7,6 +7,7 @@
 
 use std::path::Path;
 
+use pyrefly_config::config::BaselineField;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_util::absolutize::Absolutize;
 use pyrefly_util::prelude::SliceExt;
@@ -101,32 +102,80 @@ impl LegacyErrors {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct BaselineError {
-    pub column: usize,
-    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub column: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
     /// The kebab-case name of the error kind.
-    pub name: String,
-    concise_description: String,
-    #[serde(default = "default_severity")]
-    severity: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub concise_description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub severity: Option<String>,
     /// Optional notebook cell number for errors in notebook files
     #[serde(skip_serializing_if = "Option::is_none")]
-    cell: Option<usize>,
+    pub cell: Option<usize>,
+}
+
+fn includes_baseline_field(baseline_fields: &[BaselineField], field: BaselineField) -> bool {
+    baseline_fields.contains(&field)
 }
 
 impl BaselineError {
-    fn from_error(relative_to: &Path, error: &Error) -> Self {
+    fn from_error(relative_to: &Path, error: &Error, baseline_fields: &[BaselineField]) -> Self {
         let error_range = error.display_range();
         let error_path = error.path().as_path();
         Self {
-            column: error_range.start.column().get() as usize,
-            cell: error_range.start.cell().map(|cell| cell.get() as usize),
-            path: error_path
-                .relativize_from(relative_to)
-                .to_string_lossy()
-                .replace('\\', "/"), // Normalize Windows backslashes so baseline files are consistent across platforms
-            name: error.error_kind().to_name().to_owned(),
-            concise_description: error.msg_header().to_owned(),
-            severity: severity_to_str(error.severity()),
+            line: includes_baseline_field(baseline_fields, BaselineField::Line)
+                .then(|| error_range.start.line_within_cell().get() as usize),
+            column: includes_baseline_field(baseline_fields, BaselineField::Column)
+                .then(|| error_range.start.column().get() as usize),
+            cell: includes_baseline_field(baseline_fields, BaselineField::Cell)
+                .then(|| error_range.start.cell().map(|cell| cell.get() as usize))
+                .flatten(),
+            path: includes_baseline_field(baseline_fields, BaselineField::Path).then(|| {
+                error_path
+                    .relativize_from(relative_to)
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            }),
+            name: includes_baseline_field(baseline_fields, BaselineField::Name)
+                .then(|| error.error_kind().to_name().to_owned()),
+            concise_description: includes_baseline_field(
+                baseline_fields,
+                BaselineField::ConciseDescription,
+            )
+            .then(|| error.msg_header().to_owned()),
+            severity: includes_baseline_field(baseline_fields, BaselineField::Severity)
+                .then(|| severity_to_str(error.severity())),
+        }
+    }
+
+    /// Remove fields that should not be written under the configured baseline format.
+    pub(crate) fn retain_fields(&mut self, baseline_fields: &[BaselineField]) {
+        if !includes_baseline_field(baseline_fields, BaselineField::Line) {
+            self.line = None;
+        }
+        if !includes_baseline_field(baseline_fields, BaselineField::Column) {
+            self.column = None;
+        }
+        if !includes_baseline_field(baseline_fields, BaselineField::Path) {
+            self.path = None;
+        }
+        if !includes_baseline_field(baseline_fields, BaselineField::Name) {
+            self.name = None;
+        }
+        if !includes_baseline_field(baseline_fields, BaselineField::ConciseDescription) {
+            self.concise_description = None;
+        }
+        if !includes_baseline_field(baseline_fields, BaselineField::Severity) {
+            self.severity = None;
+        }
+        if !includes_baseline_field(baseline_fields, BaselineField::Cell) {
+            self.cell = None;
         }
     }
 }
@@ -137,9 +186,13 @@ pub struct BaselineErrors {
 }
 
 impl BaselineErrors {
-    pub fn from_errors(relative_to: &Path, errors: &[Error]) -> Self {
+    pub fn from_errors(
+        relative_to: &Path,
+        errors: &[Error],
+        baseline_fields: &[BaselineField],
+    ) -> Self {
         Self {
-            errors: errors.map(|e| BaselineError::from_error(relative_to, e)),
+            errors: errors.map(|e| BaselineError::from_error(relative_to, e, baseline_fields)),
         }
     }
 }
@@ -149,6 +202,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    use pyrefly_config::config::DEFAULT_BASELINE_FIELDS;
     use pyrefly_python::module::Module;
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
@@ -157,6 +211,58 @@ mod tests {
 
     use super::*;
     use crate::config::error_kind::ErrorKind;
+
+    #[test]
+    fn test_baseline_error_retains_configured_fields() {
+        let mut error: BaselineError = serde_json::from_value(serde_json::json!({
+            "line": 4,
+            "column": 8,
+            "path": "test.py",
+            "name": "bad-return",
+            "concise_description": "test",
+            "severity": "error",
+            "cell": 2
+        }))
+        .unwrap();
+        error.retain_fields(&[
+            BaselineField::Path,
+            BaselineField::Name,
+            BaselineField::ConciseDescription,
+        ]);
+
+        assert_eq!(
+            serde_json::to_value(error).unwrap(),
+            serde_json::json!({
+                "path": "test.py",
+                "name": "bad-return",
+                "concise_description": "test"
+            })
+        );
+    }
+
+    #[test]
+    fn test_baseline_error_retains_default_fields() {
+        let mut error: BaselineError = serde_json::from_value(serde_json::json!({
+            "line": 4,
+            "column": 8,
+            "path": "test.py",
+            "name": "bad-return",
+            "concise_description": "test",
+            "severity": "error",
+            "cell": 2
+        }))
+        .unwrap();
+        error.retain_fields(DEFAULT_BASELINE_FIELDS);
+
+        assert_eq!(
+            serde_json::to_value(error).unwrap(),
+            serde_json::json!({
+                "column": 8,
+                "path": "test.py",
+                "name": "bad-return"
+            })
+        );
+    }
 
     #[test]
     fn test_relativize_when_error_is_not_under_relative_to() {

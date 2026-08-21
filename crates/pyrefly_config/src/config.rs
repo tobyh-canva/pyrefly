@@ -220,6 +220,34 @@ pub enum OutputFormat {
     OmitErrors,
 }
 
+/// Fields that can identify an error in a baseline file.
+#[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum BaselineField {
+    Line,
+    Column,
+    Path,
+    Name,
+    ConciseDescription,
+    Severity,
+    Cell,
+}
+
+/// Fields written and used for matching when `baseline-fields` is not configured.
+pub const DEFAULT_BASELINE_FIELDS: &[BaselineField] = &[
+    BaselineField::Path,
+    BaselineField::Name,
+    BaselineField::Column,
+];
+
+fn default_baseline_fields() -> Vec<BaselineField> {
+    DEFAULT_BASELINE_FIELDS.to_owned()
+}
+
+fn baseline_fields_are_default(fields: &[BaselineField]) -> bool {
+    fields == DEFAULT_BASELINE_FIELDS
+}
+
 impl ConfigSource {
     /// The config root marked by a config or marker file
     pub fn root_from_file(&self) -> Option<&Path> {
@@ -610,6 +638,13 @@ pub struct ConfigFile {
     /// Defaults to `ignore`.
     pub baseline_error_level: Option<Severity>,
 
+    /// Fields to store in the baseline and use when matching errors.
+    #[serde(
+        default = "default_baseline_fields",
+        skip_serializing_if = "baseline_fields_are_default"
+    )]
+    pub baseline_fields: Vec<BaselineField>,
+
     /// Default error output format for CLI checks when `--output-format` is not set.
     pub output_format: Option<OutputFormat>,
 
@@ -724,6 +759,7 @@ impl Default for ConfigFile {
             typeshed_path: None,
             baseline: None,
             baseline_error_level: None,
+            baseline_fields: default_baseline_fields(),
             min_severity: None,
             output_format: None,
             skip_lsp_config_indexing: false,
@@ -2084,6 +2120,7 @@ mod tests {
                 typeshed_path: None,
                 baseline: None,
                 baseline_error_level: None,
+                baseline_fields: default_baseline_fields(),
                 min_severity: None,
                 skip_lsp_config_indexing: false,
                 extra_file_extensions: Vec::new(),
@@ -2409,6 +2446,7 @@ mod tests {
             typeshed_path: Some(PathBuf::from(typeshed)),
             baseline: Some(PathBuf::from("baseline.json")),
             baseline_error_level: None,
+            baseline_fields: default_baseline_fields(),
             min_severity: None,
             skip_lsp_config_indexing: false,
             extra_file_extensions: Vec::new(),
@@ -2481,6 +2519,7 @@ mod tests {
             typeshed_path: Some(expected_typeshed),
             baseline: Some(test_path.join("baseline.json")),
             baseline_error_level: None,
+            baseline_fields: default_baseline_fields(),
             min_severity: None,
             skip_lsp_config_indexing: false,
             extra_file_extensions: Vec::new(),
@@ -2568,10 +2607,23 @@ mod tests {
         let config_str = r#"
 baseline = "baseline.json"
 baseline-error-level = "warn"
+baseline-fields = ["path", "name", "concise_description", "line"]
 "#;
         let config = ConfigFile::parse_config(config_str).unwrap();
         assert_eq!(config.baseline, Some(PathBuf::from("baseline.json")));
         assert_eq!(config.baseline_error_level, Some(Severity::Warn));
+        assert_eq!(
+            config.baseline_fields,
+            vec![
+                BaselineField::Path,
+                BaselineField::Name,
+                BaselineField::ConciseDescription,
+                BaselineField::Line,
+            ]
+        );
+
+        let config = ConfigFile::parse_config("baseline = \"baseline.json\"").unwrap();
+        assert_eq!(config.baseline_fields, DEFAULT_BASELINE_FIELDS);
     }
 
     #[test]

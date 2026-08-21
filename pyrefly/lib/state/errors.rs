@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use dupe::Dupe;
+use pyrefly_config::config::BaselineField;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_python::ignore::Ignore;
@@ -328,6 +329,7 @@ impl Errors {
         errors: &mut CollectedErrors,
         baseline_path: Option<&Path>,
         relative_to: &Path,
+        baseline_fields: &[BaselineField],
         classify_stale_entries: bool,
     ) -> anyhow::Result<(usize, Vec<BaselineError>, bool)> {
         let mut unused_baseline_entries = 0;
@@ -337,10 +339,14 @@ impl Errors {
             && baseline_path.exists()
         {
             if classify_stale_entries {
-                let mut processor = TrackedBaselineProcessor::from_file(baseline_path, relative_to)
-                    .with_context(|| {
-                        format!("failed to read baseline file `{}`", baseline_path.display())
-                    })?;
+                let mut processor = TrackedBaselineProcessor::from_file(
+                    baseline_path,
+                    relative_to,
+                    baseline_fields,
+                )
+                .with_context(|| {
+                    format!("failed to read baseline file `{}`", baseline_path.display())
+                })?;
                 processor.process_errors(&mut errors.ordinary, &mut errors.baseline);
                 let checked_paths: HashSet<_> = self
                     .loads
@@ -355,10 +361,11 @@ impl Errors {
                 retained_baseline_entries = result.retained_entries;
                 baseline_loaded = true;
             } else {
-                let processor = BaselineProcessor::from_file(baseline_path, relative_to)
-                    .with_context(|| {
-                        format!("failed to read baseline file `{}`", baseline_path.display())
-                    })?;
+                let processor =
+                    BaselineProcessor::from_file(baseline_path, relative_to, baseline_fields)
+                        .with_context(|| {
+                            format!("failed to read baseline file `{}`", baseline_path.display())
+                        })?;
                 processor.process_errors(&mut errors.ordinary, &mut errors.baseline);
                 baseline_loaded = true;
             }
@@ -403,7 +410,8 @@ impl Errors {
                     .root_from_file()
                     .or_else(|| baseline_path.parent())
                     .unwrap_or_else(|| Path::new(""));
-                BaselineProcessor::from_file(baseline_path, relative_to).ok()
+                BaselineProcessor::from_file(baseline_path, relative_to, &config.baseline_fields)
+                    .ok()
             });
             if processor
                 .as_ref()

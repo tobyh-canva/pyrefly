@@ -35,6 +35,7 @@ use percent_encoding::CONTROLS;
 use percent_encoding::utf8_percent_encode;
 use pyrefly_build::handle::Handle;
 use pyrefly_config::args::ConfigOverrideArgs;
+use pyrefly_config::config::BaselineField;
 use pyrefly_config::config::ConfigFile;
 use pyrefly_config::config::OutputFormat;
 use pyrefly_config::config::SynthesizedPresetReason;
@@ -385,6 +386,10 @@ struct OutputArgs {
     #[arg(long, value_enum)]
     baseline_error_level: Option<Severity>,
 
+    /// Baseline fields inherited from project configuration.
+    #[arg(skip = ConfigFile::default().baseline_fields)]
+    baseline_fields: Vec<BaselineField>,
+
     /// When specified, emit a sorted/formatted JSON of the errors to the baseline file
     #[arg(long, group = "baseline_action")]
     update_baseline: bool,
@@ -484,6 +489,7 @@ impl OutputArgs {
         if self.baseline_error_level.is_none() {
             self.baseline_error_level = config.baseline_error_level;
         }
+        self.baseline_fields.clone_from(&config.baseline_fields);
         if self.output_format.is_none() {
             self.output_format = config.output_format;
         }
@@ -680,8 +686,16 @@ fn write_baseline_errors_to_file(path: &Path, errors: &BaselineErrors) -> anyhow
     f(path, errors).with_context(|| format!("while writing baseline to `{}`", path.display()))
 }
 
-fn write_baseline_to_file(path: &Path, relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
-    write_baseline_errors_to_file(path, &BaselineErrors::from_errors(relative_to, errors))
+fn write_baseline_to_file(
+    path: &Path,
+    relative_to: &Path,
+    errors: &[Error],
+    baseline_fields: &[BaselineField],
+) -> anyhow::Result<()> {
+    write_baseline_errors_to_file(
+        path,
+        &BaselineErrors::from_errors(relative_to, errors, baseline_fields),
+    )
 }
 
 fn write_error_json_to_console(relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
@@ -1219,12 +1233,7 @@ impl CheckArgs {
         let (loaded_handles, _, sourcedb_errors) = handles.all(state.as_ref().config_finder());
 
         // Project-level output settings can come from config when CLI flags are absent.
-        if (self.output.baseline.is_none()
-            || self.output.baseline_error_level.is_none()
-            || self.output.output_format.is_none()
-            || self.output.min_severity.is_none())
-            && let Some(handle) = loaded_handles.first()
-        {
+        if let Some(handle) = loaded_handles.first() {
             let config = state.as_ref().config_finder().python_file(
                 ModuleNameWithKind::guaranteed(handle.module()),
                 handle.path(),
@@ -1271,13 +1280,7 @@ impl CheckArgs {
         let handle = Handle::new(module_name, module_path.clone(), sys_info);
 
         // Project-level output settings can come from config when CLI flags are absent.
-        if self.output.baseline.is_none()
-            || self.output.baseline_error_level.is_none()
-            || self.output.output_format.is_none()
-            || self.output.min_severity.is_none()
-        {
-            self.output.inherit_defaults_from_config(&config);
-        }
+        self.output.inherit_defaults_from_config(&config);
 
         let require_levels = self.get_required_levels();
         let mut transaction = Forgetter::new(
@@ -1339,12 +1342,7 @@ impl CheckArgs {
             // Inherit project-level output settings from config on every iteration
             // to pick up config file changes when the CLI did not override them.
             // Reset non-CLI-provided fields first so updated config values are applied.
-            if (!cli_provided_baseline
-                || !cli_provided_baseline_error_level
-                || !cli_provided_output_format
-                || !cli_provided_min_severity)
-                && let Some(handle) = loaded_handles.first()
-            {
+            if let Some(handle) = loaded_handles.first() {
                 if !cli_provided_baseline {
                     self.output.baseline = None;
                 }
@@ -1535,6 +1533,7 @@ impl CheckArgs {
                 &mut collected,
                 self.output.baseline.as_deref(),
                 relative_to.as_path(),
+                &self.output.baseline_fields,
                 self.output.prune_baseline || self.output.error_stale_baseline,
             ) {
             Ok(result) => result,
@@ -1674,7 +1673,12 @@ impl CheckArgs {
                     error.error_kind(),
                 )
             });
-            write_baseline_to_file(baseline_path, relative_to.as_path(), &new_baseline)?;
+            write_baseline_to_file(
+                baseline_path,
+                relative_to.as_path(),
+                &new_baseline,
+                &self.output.baseline_fields,
+            )?;
         } else if rewriting_baseline {
             let baseline_path = self
                 .output
